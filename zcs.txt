@@ -1,1 +1,194 @@
-https://chatgpt.com/share/69a526ff-820c-800b-8b1f-1aad409217cc
+下面是一份可直接放进 OpenClaw/ClawHub 的 **`SKILL.md`**（Markdown + YAML frontmatter）示例：它把 **mcp-jobs** 作为后端 MCP 服务来做「职位搜索 / 职位详情」两件事。内容里也包含了你提到的 `npx -y mcp-jobs` 零配置启动方式与可选环境变量。 ([GitHub][1])
+
+> 说明：mcp-jobs 具体暴露出来的 MCP tool 名称，通常会跟它导出的函数一致（例如 `searchJobList` / `crawlJobDetail`），但以你客户端里 `tools/list` 显示的为准（有的会带前缀或命名空间）。这份 skill 写法会引导 agent 先“发现工具列表”，再选择正确的工具名。
+
+````markdown
+---
+name: mcp-jobs-job-search
+description: 使用 mcp-jobs（MCP 多平台职位聚合服务）搜索国内岗位并获取职位详情；支持关键词/城市/薪资/年限筛选，输出标准化结果表。
+version: 1.0.0
+metadata:
+  openclaw:
+    requires:
+      bins:
+        - node
+        - npx
+    # 这些是可选项：mcp-jobs 不需要任何 env 也能跑，但如果你要启用鉴权/调试/浏览器参数，可在运行 mcp-jobs 时注入
+    # 这里写出来，方便安全审计与用户理解（不会强制要求）
+    # requires:
+    #   env:
+    #     - USERNAME
+    #     - PASSWORD
+    #     - CRAWLER_HEADLESS
+    #     - CRAWLER_TIMEOUT
+    #     - CRAWLER_VIEWPORT_WIDTH
+    #     - CRAWLER_VIEWPORT_HEIGHT
+    #     - CRAWLER_DEBUG
+    emoji: "🧭"
+    homepage: https://github.com/mergedao/mcp-jobs
+---
+
+# mcp-jobs 求职搜索 Skill（OpenClaw）
+
+本 skill 教你如何让 OpenClaw 通过 **mcp-jobs** MCP 服务完成两类任务：
+
+1) **搜索职位列表**（多平台聚合）  
+2) **获取某个职位链接的详细信息**
+
+---
+
+## 依赖与启动（一次性准备）
+
+### 1) 启动 mcp-jobs（零配置）
+在终端运行：
+
+```bash
+npx -y mcp-jobs
+````
+
+保持该进程运行（它会作为 MCP server 被客户端连接）。
+
+> 可选：你也可以全局安装后用 `mcp-jobs` 直接启动。
+
+### 2) 在你的 MCP 客户端里添加 server
+
+以 Cursor/Claude Desktop/OpenClaw 为例，配置一个 MCP server：
+
+* **Name**: `mcp-jobs`
+* **Type**: `command`
+* **Command**: `npx -y mcp-jobs`
+* **Env**: 留空（默认即可）
+
+---
+
+## 你（Agent）应该如何使用 mcp-jobs 工具
+
+### 工具发现（必须先做）
+
+当你需要调用 mcp-jobs 时，先对 **mcp-jobs server** 发起 `tools/list`：
+
+* 记录可用 tool 名称
+* 找到“搜索职位列表”和“抓取职位详情”两个工具
+
+**常见工具名（以 tools/list 为准）：**
+
+* `searchJobList`：按条件搜索职位列表
+* `crawlJobDetail`：按职位 URL 获取详情
+
+> 如果 tools/list 返回的名字带前缀（例如 `mcp_jobs_searchJobList`），请使用实际返回的名字。
+
+---
+
+## 任务 1：搜索职位列表（多平台聚合）
+
+### 何时用
+
+用户说类似：
+
+* “搜索北京的前端开发职位”
+* “找上海 AI 工程师，薪资 30-50k，3-5 年”
+* “杭州 1-3 年 数据分析 岗位”
+
+### 调用策略
+
+1. 从用户话里抽取参数（尽量完整，但缺省也可）
+2. 调用 `searchJobList`（或 tools/list 显示的对应名称）
+3. 将返回的数组结果做去重 + 排序 + 表格化输出
+
+### 入参（SearchParams）
+
+* `keyword?: string`  职位关键词，如 “前端开发/AI工程师/算法”
+* `city?: string`     城市，如 “北京/上海/杭州”
+* `page?: number`     页码，默认 1
+* `salary?: string`   薪资范围（保持用户原格式即可，如 “10-15万” 或 “30-50k”）
+* `workYear?: string` 年限，如 “1-3年/3-5年/5-10年”
+
+### 输出格式（你给用户的最终答案）
+
+请用 Markdown 表格输出，至少包含：
+
+* 平台/来源（若返回里有）
+* 公司
+* 职位
+* 城市
+* 薪资
+* 经验/学历（若有）
+* 链接（必须）
+  并在表格后给出：
+* 你认为最匹配的 TOP 5（含理由）
+* 下一步建议（要不要抓详情、要不要按公司/技术栈再筛）
+
+### 去重建议
+
+用如下 key 去重（从可用字段里尽量拼）：
+
+* `company + title + city + salary + link`
+  若字段缺失，至少用 `link` 去重。
+
+---
+
+## 任务 2：获取职位详情（JD、职责、要求等）
+
+### 何时用
+
+用户说类似：
+
+* “打开第 3 个岗位，给我完整 JD”
+* “分析这个岗位要求和薪资是否合理：<链接>”
+* “对比这两个岗位的职责差异：<链接1> <链接2>”
+
+### 调用策略
+
+1. 从用户提供的链接中识别职位 URL（如果是表格里的条目，取对应 link）
+2. 调用 `crawlJobDetail(url)`
+3. 输出：
+
+   * 岗位职责要点（bullet）
+   * 任职要求要点（bullet）
+   * 技能关键词（提取 10-20 个）
+   * 风险提示（如：要求过宽/薪资不透明/加班倾向等——仅基于文本做推断，避免武断）
+
+---
+
+## 用户可直接说的自然语言示例（你应当支持）
+
+* “搜索北京的前端开发职位”
+* “查找上海的 AI 工程师，要求 3-5 年经验，薪资 30-50k”
+* “把结果按薪资从高到低排序，输出前 20”
+* “获取这个职位的详细信息：<url>”
+* “总结近 14 天 AI 工程师岗位最常出现的技能关键词”
+
+---
+
+## 可选高级配置（仅在需要时提示用户）
+
+mcp-jobs 支持通过环境变量增强行为（完全可选）：
+
+* `USERNAME` / `PASSWORD`：基础认证
+* `CRAWLER_HEADLESS`：true/false（调试可设 false）
+* `CRAWLER_TIMEOUT`：毫秒
+* `CRAWLER_VIEWPORT_WIDTH` / `CRAWLER_VIEWPORT_HEIGHT`
+* `CRAWLER_DEBUG`：true/false
+
+如果用户遇到验证码/频繁失败：
+
+* 建议降低抓取频率、减少并发、使用 `CRAWLER_HEADLESS=false` 调试观察
+* 必要时让用户改用更少的平台范围或缩小查询窗口
+
+---
+
+## 安全与合规提示（必须遵守）
+
+* 不要要求用户运行来历不明的命令或粘贴可疑脚本
+* 不要尝试绕过招聘网站的验证码/反爬机制
+* 结果仅用于信息检索；投递行为建议由用户确认后手动完成或半自动完成
+
+```
+
+如果你希望我把这份 `SKILL.md` 再“贴合你实际环境”，我可以顺手帮你做两种增强版本（不需要你补充信息也能先给默认值）：
+1) **偏工程化**：自动把结果导出 CSV/JSON（方便你再喂给简历匹配器）  
+2) **偏求职工作流**：搜索 → 去重 → 抓 TOP N 详情 → 生成“技能缺口清单 & 简历改写建议”
+::contentReference[oaicite:1]{index=1}
+```
+
+[1]: https://github.com/mergedao/mcp-jobs "GitHub - mergedao/mcp-jobs: 使用MCP获取猎聘、Boss、智联、51job职位"
