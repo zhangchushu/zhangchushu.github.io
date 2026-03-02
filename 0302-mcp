@@ -1,3 +1,7 @@
+@cn-housing-search
+仅调用一次 search_listings，参数：{"city":"北京","keywords":"整租 近地铁","purpose":"rent","limit":5}
+把工具原始 JSON 直接打印出来，不要总结
+
 用户请求查询长沙中兴通讯公司附近 5 公里内的租房房源，我需要使用 cn-housing-mcp 工具的 search_listings 函数，设置城市为长沙，位置为中兴通
 讯公司附近，距离为 5 公里，目的是租房。 </think>
 npm 包名不正确导致安装失败，需要搜索正确的 cn-housing 相关包来查询房源信息。 </think>
